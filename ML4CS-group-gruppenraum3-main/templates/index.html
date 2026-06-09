@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Air-Writing Live Demo — Gruppenraum 3</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --navy: #1E2761;
+    --teal: #028090;
+    --mint: #02C39A;
+    --light: #F0F4F8;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--navy);
+    color: white;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: rgba(255,255,255,0.05);
+    padding: 18px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 3px solid var(--teal);
+  }
+  header h1 { font-size: 1.3rem; font-weight: 600; }
+  header .badge {
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .badge.online  { background: var(--mint); color: var(--navy); }
+  .badge.offline { background: #C0392B; }
+
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1.2fr;
+    gap: 24px;
+    padding: 24px 30px;
+    max-width: 1300px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .card {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .card h2 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--mint);
+    margin-bottom: 16px;
+  }
+
+  /* Grosse Ziffer */
+  .prediction-display {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 280px;
+  }
+  #bigDigit {
+    font-size: 9rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--mint);
+    text-shadow: 0 0 40px rgba(2,195,154,0.4);
+    transition: transform 0.15s ease;
+  }
+  #bigDigit.pulse { transform: scale(1.15); }
+  #confidence { font-size: 1.4rem; margin-top: 12px; color: rgba(255,255,255,0.8); }
+  #statusText {
+    margin-top: 18px;
+    font-size: 1rem;
+    color: rgba(255,255,255,0.55);
+    min-height: 1.4em;
+  }
+  .recording-dot {
+    display: inline-block;
+    width: 12px; height: 12px;
+    background: #E74C3C;
+    border-radius: 50%;
+    margin-right: 8px;
+    animation: blink 0.8s infinite;
+  }
+  @keyframes blink { 50% { opacity: 0.2; } }
+
+  /* Wahrscheinlichkeits-Balken */
+  .prob-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .prob-label { width: 24px; font-weight: 700; font-size: 1rem; }
+  .prob-track {
+    flex: 1;
+    height: 18px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 9px;
+    overflow: hidden;
+  }
+  .prob-fill {
+    height: 100%;
+    background: var(--teal);
+    border-radius: 9px;
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  .prob-fill.winner { background: var(--mint); }
+  .prob-value { width: 48px; text-align: right; font-size: 0.85rem; color: rgba(255,255,255,0.6); }
+
+  /* Graph */
+  .chart-wrap { height: 220px; }
+  footer {
+    text-align: center;
+    padding: 14px;
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.35);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>✍️ Air-Writing Ziffernerkennung — Live</h1>
+  <span id="connBadge" class="badge offline">Phyphox: getrennt</span>
+</header>
+
+<main>
+  <!-- Linke Spalte: Vorhersage -->
+  <div>
+    <div class="card prediction-display">
+      <div id="bigDigit">–</div>
+      <div id="confidence"></div>
+      <div id="statusText">Warte auf Verbindung...</div>
+    </div>
+  </div>
+
+  <!-- Rechte Spalte: Graph + Wahrscheinlichkeiten -->
+  <div style="display:flex; flex-direction:column; gap:24px;">
+    <div class="card">
+      <h2>Live-Sensorsignal (Beschleunigung)</h2>
+      <div class="chart-wrap"><canvas id="liveChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Wahrscheinlichkeiten</h2>
+      <div id="probBars"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  ML4SCS — Gruppenraum 3 · Isa Kilic, Efe Özüm, Tony Duong · LSTM auf Smartphone-IMU-Daten
+</footer>
+
+<script>
+const DIGITS = [0,1,2,3,4,5,6,7,8,9];
+
+// Wahrscheinlichkeits-Balken vorbereiten
+const probBars = document.getElementById("probBars");
+DIGITS.forEach(d => {
+  probBars.insertAdjacentHTML("beforeend", `
+    <div class="prob-row">
+      <div class="prob-label">${d}</div>
+      <div class="prob-track"><div class="prob-fill" id="fill-${d}"></div></div>
+      <div class="prob-value" id="val-${d}">0%</div>
+    </div>`);
+});
+
+// Live-Chart
+const ctx = document.getElementById("liveChart").getContext("2d");
+const chart = new Chart(ctx, {
+  type: "line",
+  data: {
+    labels: Array.from({length: 300}, (_, i) => i),
+    datasets: [{
+      data: new Array(300).fill(0),
+      borderColor: "#02C39A",
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: { target: "origin", above: "rgba(2,195,154,0.08)" },
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { display: false },
+      y: {
+        min: 0,
+        suggestedMax: 10,
+        grid: { color: "rgba(255,255,255,0.06)" },
+        ticks: { color: "rgba(255,255,255,0.4)" }
+      }
+    }
+  }
+});
+
+let lastPrediction = null;
+
+async function poll() {
+  try {
+    const r = await fetch("/status");
+    const s = await r.json();
+
+    // Verbindungs-Badge
+    const badge = document.getElementById("connBadge");
+    badge.className = "badge " + (s.connected ? "online" : "offline");
+    badge.textContent = s.connected ? "Phyphox: verbunden" : "Phyphox: getrennt";
+
+    // Status / Aufnahme-Anzeige
+    const statusEl = document.getElementById("statusText");
+    statusEl.innerHTML = s.recording
+      ? '<span class="recording-dot"></span>Geste wird aufgenommen...'
+      : (s.status_text || "");
+
+    // Grosse Ziffer
+    if (s.prediction !== null && s.prediction !== undefined) {
+      const big = document.getElementById("bigDigit");
+      big.textContent = s.prediction;
+      document.getElementById("confidence").textContent =
+        (s.confidence * 100).toFixed(0) + "% Konfidenz";
+      if (s.prediction !== lastPrediction) {
+        big.classList.add("pulse");
+        setTimeout(() => big.classList.remove("pulse"), 200);
+        lastPrediction = s.prediction;
+      }
+    }
+
+    // Wahrscheinlichkeiten
+    const best = s.prediction;
+    DIGITS.forEach(d => {
+      const p = (s.probabilities && s.probabilities[d]) ? s.probabilities[d] : 0;
+      const fill = document.getElementById("fill-" + d);
+      fill.style.width = (p * 100) + "%";
+      fill.classList.toggle("winner", d === best);
+      document.getElementById("val-" + d).textContent = (p * 100).toFixed(0) + "%";
+    });
+
+    // Live-Graph
+    const sig = s.live_signal || [];
+    const padded = new Array(Math.max(0, 300 - sig.length)).fill(0).concat(sig.slice(-300));
+    chart.data.datasets[0].data = padded;
+    chart.update();
+  } catch (e) { /* Backend kurz nicht erreichbar */ }
+}
+
+setInterval(poll, 200);
+poll();
+</script>
+</body>
+</html>
